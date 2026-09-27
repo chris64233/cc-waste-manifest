@@ -1,5 +1,8 @@
 package com.chris64233.cc.wastemanifest.manifest;
 
+import com.chris64233.cc.wastemanifest.correction.ManifestVersion;
+import com.chris64233.cc.wastemanifest.correction.ManifestVersionItem;
+import com.chris64233.cc.wastemanifest.correction.ManifestVersionRepository;
 import com.chris64233.cc.wastemanifest.manifest.dto.CreateManifestRequest;
 import com.chris64233.cc.wastemanifest.manifest.dto.DisputeConfirmRequest;
 import com.chris64233.cc.wastemanifest.manifest.dto.HandoverRequest;
@@ -24,13 +27,16 @@ public class ManifestService {
 
     private final ManifestRepository manifests;
     private final ManifestEventRepository events;
+    private final ManifestVersionRepository versions;
     private final BigDecimal weightToleranceRatio;
 
     public ManifestService(ManifestRepository manifests,
                            ManifestEventRepository events,
+                           ManifestVersionRepository versions,
                            @Value("${manifest.weight-tolerance-ratio:0.05}") BigDecimal weightToleranceRatio) {
         this.manifests = manifests;
         this.events = events;
+        this.versions = versions;
         this.weightToleranceRatio = weightToleranceRatio;
     }
 
@@ -86,7 +92,12 @@ public class ManifestService {
         switch (type) {
             case GENERATOR_SHIP -> manifest.markInTransit();
             case TRANSPORTER_RECEIVE -> manifest.markReceivedByTransporter();
-            case DISPOSER_RECEIVE -> settleByWeight(manifest, weight);
+            case DISPOSER_RECEIVE -> {
+                settleByWeight(manifest, weight);
+                if (manifest.getStatus() == ManifestStatus.COMPLETED) {
+                    snapshotInitialVersion(manifest);
+                }
+            }
             default -> throw new IllegalStateException("非交接事件类型: " + type);
         }
         return toDetail(manifest);
@@ -125,6 +136,7 @@ public class ManifestService {
         if (generatorWeight != null && disposerWeight != null
                 && generatorWeight.compareTo(disposerWeight) == 0) {
             manifest.markCompleted(manifest.getReceivedWeight(), generatorWeight);
+            snapshotInitialVersion(manifest);
         }
         return toDetail(manifest);
     }
@@ -159,6 +171,21 @@ public class ManifestService {
         } else {
             manifest.markWeightDispute(receivedWeight);
         }
+    }
+
+    /** 联单完成时固化版本 1 快照；原始联单行与交接事件保持不可修改。 */
+    public void snapshotInitialVersion(Manifest manifest) {
+        if (versions.findEffectiveByManifest(manifest).isPresent()) {
+            return;
+        }
+        ManifestVersion version = new ManifestVersion(manifest, 1,
+                manifest.getDeclaredTotalWeight(), manifest.getReceivedWeight(), manifest.getFinalWeight());
+        int seq = 1;
+        for (ManifestItem item : manifest.getItems()) {
+            version.addItem(new ManifestVersionItem(version, seq++, item.getWasteCategory(),
+                    item.getPackageCount(), item.getDeclaredWeight()));
+        }
+        versions.save(version);
     }
 
     private BigDecimal latestConfirmWeight(List<ManifestEvent> timeline, DisputeConfirmRequest current,
@@ -204,7 +231,7 @@ public class ManifestService {
         return weight.setScale(3, RoundingMode.UNNECESSARY);
     }
 
-    private static ManifestDetailResponse toDetail(Manifest manifest) {
+    public static ManifestDetailResponse toDetail(Manifest manifest) {
         List<ManifestItemResponse> items = manifest.getItems().stream()
                 .map(item -> new ManifestItemResponse(item.getWasteCategory(),
                         item.getPackageCount(), item.getDeclaredWeight()))
@@ -212,11 +239,18 @@ public class ManifestService {
         return new ManifestDetailResponse(manifest.getManifestNo(), manifest.getGeneratorId(),
                 manifest.getTransporterId(), manifest.getDisposerId(), manifest.getStatus(),
                 manifest.getCurrentCustodian(), manifest.getDeclaredTotalWeight(),
-                manifest.getReceivedWeight(), manifest.getFinalWeight(), items, manifest.getCreatedAt());
+                manifest.getReceivedWeight(), manifest.getFinalWeight(), items, manifest.getCreatedAt(),
+                manifest.getCurrentVersionNo(), manifest.isRegulatoryFrozen());
     }
 
     private static ManifestEventResponse toEventResponse(ManifestEvent event) {
         return new ManifestEventResponse(event.getEventNo(), event.getType(), event.getRole(),
                 event.getWeight(), event.getOccurredAt(), event.getRecordedAt());
+    }
+
+    public static List<ManifestEventResponse> toEventResponses(List<ManifestEvent> events) {
+        return events.stream()
+                .map(ManifestService::toEventResponse)
+                .toList();
     }
 }

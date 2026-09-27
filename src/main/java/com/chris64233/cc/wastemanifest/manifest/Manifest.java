@@ -54,6 +54,14 @@ public class Manifest {
     @Column(name = "final_weight", precision = 19, scale = 3)
     private BigDecimal finalWeight;
 
+    /** 当前有效版本号，版本 1 为联单完成时的原始内容 */
+    @Column(name = "current_version_no", nullable = false)
+    private int currentVersionNo = 1;
+
+    /** 监管冻结期间不得发起或落定任何更正 */
+    @Column(name = "regulatory_frozen", nullable = false)
+    private boolean regulatoryFrozen = false;
+
     @OneToMany(mappedBy = "manifest", cascade = CascadeType.ALL, orphanRemoval = true)
     @OrderBy("id ASC")
     private List<ManifestItem> items = new ArrayList<>();
@@ -98,6 +106,15 @@ public class Manifest {
         this.receivedWeight = receivedWeight;
     }
 
+    /** 更正生效：仅推进当前有效版本指针，联单原始行与交接事件不变。 */
+    public void applyNewVersion(int versionNo) {
+        this.currentVersionNo = versionNo;
+    }
+
+    public void freeze() {
+        this.regulatoryFrozen = true;
+    }
+
     public Long getId() {
         return id;
     }
@@ -140,6 +157,14 @@ public class Manifest {
 
     public BigDecimal getFinalWeight() {
         return finalWeight;
+    }
+
+    public int getCurrentVersionNo() {
+        return currentVersionNo;
+    }
+
+    public boolean isRegulatoryFrozen() {
+        return regulatoryFrozen;
     }
 
     public List<ManifestItem> getItems() {

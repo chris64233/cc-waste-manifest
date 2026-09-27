@@ -32,8 +32,20 @@ class ManifestConcurrencyTest {
     @Autowired
     private ManifestEventRepository events;
 
+    @Autowired
+    private com.chris64233.cc.wastemanifest.correction.CorrectionDecisionRepository correctionDecisions;
+
+    @Autowired
+    private com.chris64233.cc.wastemanifest.correction.CorrectionRepository correctionRepo;
+
+    @Autowired
+    private com.chris64233.cc.wastemanifest.correction.ManifestVersionRepository versionRepo;
+
     @BeforeEach
     void setUp() {
+        correctionDecisions.deleteAll();
+        correctionRepo.deleteAll();
+        versionRepo.deleteAll();
         events.deleteAll();
         manifests.deleteAll();
     }
