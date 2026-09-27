@@ -13,16 +13,19 @@ import jakarta.persistence.Table;
 import java.math.BigDecimal;
 
 @Entity
-@Table(name = "manifest_items")
-public class ManifestItem {
+@Table(name = "manifest_version_items")
+public class ManifestVersionItem {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "manifest_id", nullable = false, updatable = false)
-    private Manifest manifest;
+    @JoinColumn(name = "version_id", nullable = false, updatable = false)
+    private ManifestVersion version;
+
+    @Column(name = "item_index", nullable = false, updatable = false)
+    private int itemIndex;
 
     @Column(name = "waste_category", nullable = false, updatable = false, length = 64)
     private String wasteCategory;
@@ -33,11 +36,13 @@ public class ManifestItem {
     @Column(name = "declared_weight", nullable = false, updatable = false, precision = 19, scale = 3)
     private BigDecimal declaredWeight;
 
-    protected ManifestItem() {
+    protected ManifestVersionItem() {
     }
 
-    public ManifestItem(Manifest manifest, String wasteCategory, int packageCount, BigDecimal declaredWeight) {
-        this.manifest = manifest;
+    public ManifestVersionItem(ManifestVersion version, int itemIndex, String wasteCategory,
+                               int packageCount, BigDecimal declaredWeight) {
+        this.version = version;
+        this.itemIndex = itemIndex;
         this.wasteCategory = wasteCategory;
         this.packageCount = packageCount;
         this.declaredWeight = declaredWeight;
@@ -47,8 +52,12 @@ public class ManifestItem {
         return id;
     }
 
-    public Manifest getManifest() {
-        return manifest;
+    public ManifestVersion getVersion() {
+        return version;
+    }
+
+    public int getItemIndex() {
+        return itemIndex;
     }
 
     public String getWasteCategory() {

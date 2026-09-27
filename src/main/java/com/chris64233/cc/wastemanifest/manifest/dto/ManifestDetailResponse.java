@@ -17,6 +17,8 @@ public record ManifestDetailResponse(
         BigDecimal declaredTotalWeight,
         BigDecimal receivedWeight,
         BigDecimal finalWeight,
+        int currentVersionNo,
+        boolean frozen,
         List<ManifestItemResponse> items,
         Instant createdAt) {
 }

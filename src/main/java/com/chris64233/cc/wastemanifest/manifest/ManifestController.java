@@ -5,6 +5,7 @@ import com.chris64233.cc.wastemanifest.manifest.dto.DisputeConfirmRequest;
 import com.chris64233.cc.wastemanifest.manifest.dto.HandoverRequest;
 import com.chris64233.cc.wastemanifest.manifest.dto.ManifestDetailResponse;
 import com.chris64233.cc.wastemanifest.manifest.dto.ManifestEventResponse;
+import com.chris64233.cc.wastemanifest.manifest.dto.ManifestRevisionsResponse;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -22,9 +23,11 @@ import java.util.List;
 public class ManifestController {
 
     private final ManifestService service;
+    private final CorrectionService correctionService;
 
-    public ManifestController(ManifestService service) {
+    public ManifestController(ManifestService service, CorrectionService correctionService) {
         this.service = service;
+        this.correctionService = correctionService;
     }
 
     @PostMapping
@@ -42,6 +45,11 @@ public class ManifestController {
         return service.getTimeline(manifestNo);
     }
 
+    @GetMapping("/{manifestNo}/revisions")
+    public ManifestRevisionsResponse revisions(@PathVariable String manifestNo) {
+        return correctionService.getRevisions(manifestNo);
+    }
+
     @PostMapping("/{manifestNo}/handover")
     public ManifestDetailResponse handover(@PathVariable String manifestNo,
                                            @Valid @RequestBody HandoverRequest request) {
@@ -52,5 +60,15 @@ public class ManifestController {
     public ManifestDetailResponse confirmDispute(@PathVariable String manifestNo,
                                                  @Valid @RequestBody DisputeConfirmRequest request) {
         return service.confirmDispute(manifestNo, request);
+    }
+
+    @PostMapping("/{manifestNo}/freeze")
+    public ManifestDetailResponse freeze(@PathVariable String manifestNo) {
+        return service.freeze(manifestNo);
+    }
+
+    @PostMapping("/{manifestNo}/unfreeze")
+    public ManifestDetailResponse unfreeze(@PathVariable String manifestNo) {
+        return service.unfreeze(manifestNo);
     }
 }

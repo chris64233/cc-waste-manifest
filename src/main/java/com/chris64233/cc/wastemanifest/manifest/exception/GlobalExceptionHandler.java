@@ -21,6 +21,11 @@ public class GlobalExceptionHandler {
         return build(HttpStatus.NOT_FOUND, e.getMessage(), request);
     }
 
+    @ExceptionHandler(CorrectionNotFoundException.class)
+    public ResponseEntity<ErrorResponse> correctionNotFound(CorrectionNotFoundException e, HttpServletRequest request) {
+        return build(HttpStatus.NOT_FOUND, e.getMessage(), request);
+    }
+
     @ExceptionHandler(ConflictException.class)
     public ResponseEntity<ErrorResponse> conflict(ConflictException e, HttpServletRequest request) {
         return build(HttpStatus.CONFLICT, e.getMessage(), request);

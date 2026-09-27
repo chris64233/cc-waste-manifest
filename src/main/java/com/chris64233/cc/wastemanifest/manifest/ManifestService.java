@@ -24,13 +24,19 @@ public class ManifestService {
 
     private final ManifestRepository manifests;
     private final ManifestEventRepository events;
+    private final ManifestVersionRepository versions;
+    private final ManifestCorrectionRepository corrections;
     private final BigDecimal weightToleranceRatio;
 
     public ManifestService(ManifestRepository manifests,
                            ManifestEventRepository events,
+                           ManifestVersionRepository versions,
+                           ManifestCorrectionRepository corrections,
                            @Value("${manifest.weight-tolerance-ratio:0.05}") BigDecimal weightToleranceRatio) {
         this.manifests = manifests;
         this.events = events;
+        this.versions = versions;
+        this.corrections = corrections;
         this.weightToleranceRatio = weightToleranceRatio;
     }
 
@@ -41,15 +47,19 @@ public class ManifestService {
         }
         Manifest manifest = new Manifest(request.manifestNo(), request.generatorId(),
                 request.transporterId(), request.disposerId());
+        ManifestVersion firstVersion = new ManifestVersion(manifest, 1, VersionSource.ORIGINAL, null);
         BigDecimal total = BigDecimal.ZERO;
+        int itemIndex = 0;
         for (var itemRequest : request.items()) {
             BigDecimal weight = normalize(itemRequest.declaredWeight());
-            manifest.addItem(new ManifestItem(manifest, itemRequest.wasteCategory(),
-                    itemRequest.packageCount(), weight));
+            firstVersion.addItem(new ManifestVersionItem(firstVersion, itemIndex++,
+                    itemRequest.wasteCategory(), itemRequest.packageCount(), weight));
             total = total.add(weight);
         }
+        firstVersion.setDeclaredTotalWeight(total);
         manifest.setDeclaredTotalWeight(total);
         manifests.save(manifest);
+        versions.save(firstVersion);
         return toDetail(manifest);
     }
 
@@ -68,6 +78,7 @@ public class ManifestService {
             throw new ConflictException("事件号已存在且内容不一致: " + request.eventNo());
         }
 
+        rejectIfFrozen(manifest);
         CustodianRole expectedRole = switch (manifest.getStatus()) {
             case CREATED -> CustodianRole.GENERATOR;
             case IN_TRANSIT -> CustodianRole.TRANSPORTER;
@@ -110,6 +121,7 @@ public class ManifestService {
             throw new ConflictException("事件号已存在且内容不一致: " + request.eventNo());
         }
 
+        rejectIfFrozen(manifest);
         if (manifest.getStatus() != ManifestStatus.WEIGHT_DISPUTE) {
             throw new BusinessRuleException("当前状态不存在重量争议: " + manifest.getStatus());
         }
@@ -126,6 +138,24 @@ public class ManifestService {
                 && generatorWeight.compareTo(disposerWeight) == 0) {
             manifest.markCompleted(manifest.getReceivedWeight(), generatorWeight);
         }
+        return toDetail(manifest);
+    }
+
+    @Transactional
+    public ManifestDetailResponse freeze(String manifestNo) {
+        Manifest manifest = lockManifest(manifestNo);
+        manifest.freeze();
+        for (ManifestCorrection correction
+                : corrections.findByManifestAndStatus(manifest, CorrectionStatus.PENDING)) {
+            correction.invalidate();
+        }
+        return toDetail(manifest);
+    }
+
+    @Transactional
+    public ManifestDetailResponse unfreeze(String manifestNo) {
+        Manifest manifest = lockManifest(manifestNo);
+        manifest.unfreeze();
         return toDetail(manifest);
     }
 
@@ -148,6 +178,12 @@ public class ManifestService {
     private Manifest lockManifest(String manifestNo) {
         return manifests.findByManifestNoForUpdate(manifestNo)
                 .orElseThrow(() -> new ManifestNotFoundException(manifestNo));
+    }
+
+    private void rejectIfFrozen(Manifest manifest) {
+        if (manifest.isFrozen()) {
+            throw new BusinessRuleException("联单处于监管冻结状态，禁止交接与争议确认: " + manifest.getManifestNo());
+        }
     }
 
     private void settleByWeight(Manifest manifest, BigDecimal receivedWeight) {
@@ -204,15 +240,20 @@ public class ManifestService {
         return weight.setScale(3, RoundingMode.UNNECESSARY);
     }
 
-    private static ManifestDetailResponse toDetail(Manifest manifest) {
-        List<ManifestItemResponse> items = manifest.getItems().stream()
+    private ManifestDetailResponse toDetail(Manifest manifest) {
+        ManifestVersion currentVersion = versions
+                .findByManifestAndVersionNo(manifest, manifest.getCurrentVersionNo())
+                .orElseThrow(() -> new IllegalStateException(
+                        "联单当前有效版本缺失: " + manifest.getManifestNo() + " v" + manifest.getCurrentVersionNo()));
+        List<ManifestItemResponse> items = currentVersion.getItems().stream()
                 .map(item -> new ManifestItemResponse(item.getWasteCategory(),
                         item.getPackageCount(), item.getDeclaredWeight()))
                 .toList();
         return new ManifestDetailResponse(manifest.getManifestNo(), manifest.getGeneratorId(),
                 manifest.getTransporterId(), manifest.getDisposerId(), manifest.getStatus(),
                 manifest.getCurrentCustodian(), manifest.getDeclaredTotalWeight(),
-                manifest.getReceivedWeight(), manifest.getFinalWeight(), items, manifest.getCreatedAt());
+                manifest.getReceivedWeight(), manifest.getFinalWeight(),
+                manifest.getCurrentVersionNo(), manifest.isFrozen(), items, manifest.getCreatedAt());
     }
 
     private static ManifestEventResponse toEventResponse(ManifestEvent event) {

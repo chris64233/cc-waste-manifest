@@ -1,6 +1,5 @@
 package com.chris64233.cc.wastemanifest.manifest;
 
-import jakarta.persistence.CascadeType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -8,14 +7,10 @@ import jakarta.persistence.Enumerated;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
-import jakarta.persistence.OneToMany;
-import jakarta.persistence.OrderBy;
 import jakarta.persistence.Table;
 
 import java.math.BigDecimal;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.List;
 
 @Entity
 @Table(name = "manifests")
@@ -54,9 +49,11 @@ public class Manifest {
     @Column(name = "final_weight", precision = 19, scale = 3)
     private BigDecimal finalWeight;
 
-    @OneToMany(mappedBy = "manifest", cascade = CascadeType.ALL, orphanRemoval = true)
-    @OrderBy("id ASC")
-    private List<ManifestItem> items = new ArrayList<>();
+    @Column(name = "current_version_no", nullable = false)
+    private int currentVersionNo = 1;
+
+    @Column(name = "frozen", nullable = false)
+    private boolean frozen = false;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt = Instant.now();
@@ -69,10 +66,6 @@ public class Manifest {
         this.generatorId = generatorId;
         this.transporterId = transporterId;
         this.disposerId = disposerId;
-    }
-
-    public void addItem(ManifestItem item) {
-        items.add(item);
     }
 
     public void markInTransit() {
@@ -96,6 +89,19 @@ public class Manifest {
         this.status = ManifestStatus.WEIGHT_DISPUTE;
         this.currentCustodian = CustodianRole.DISPOSER;
         this.receivedWeight = receivedWeight;
+    }
+
+    public void applyCorrectedVersion(int versionNo, BigDecimal correctedDeclaredTotalWeight) {
+        this.currentVersionNo = versionNo;
+        this.declaredTotalWeight = correctedDeclaredTotalWeight;
+    }
+
+    public void freeze() {
+        this.frozen = true;
+    }
+
+    public void unfreeze() {
+        this.frozen = false;
     }
 
     public Long getId() {
@@ -142,8 +148,12 @@ public class Manifest {
         return finalWeight;
     }
 
-    public List<ManifestItem> getItems() {
-        return items;
+    public int getCurrentVersionNo() {
+        return currentVersionNo;
+    }
+
+    public boolean isFrozen() {
+        return frozen;
     }
 
     public Instant getCreatedAt() {

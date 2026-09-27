@@ -26,11 +26,23 @@ class ManifestApiIntegrationTest {
     @Autowired
     private ManifestEventRepository events;
 
+    @Autowired
+    private ManifestVersionRepository versions;
+
+    @Autowired
+    private ManifestCorrectionRepository corrections;
+
+    @Autowired
+    private CorrectionDecisionRepository decisions;
+
     private MockMvc mockMvc;
 
     @BeforeEach
     void setUp() {
         mockMvc = MockMvcBuilders.webAppContextSetup(context).build();
+        decisions.deleteAll();
+        corrections.deleteAll();
+        versions.deleteAll();
         events.deleteAll();
         manifests.deleteAll();
     }
