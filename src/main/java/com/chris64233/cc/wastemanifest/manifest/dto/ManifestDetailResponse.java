@@ -15,10 +15,12 @@ public record ManifestDetailResponse(
         ManifestStatus status,
         CustodianRole currentCustodian,
         BigDecimal declaredTotalWeight,
+        BigDecimal remainingDeclaredWeight,
         BigDecimal receivedWeight,
         BigDecimal finalWeight,
         List<ManifestItemResponse> items,
         Instant createdAt,
         int currentVersionNo,
-        boolean regulatoryFrozen) {
+        boolean regulatoryFrozen,
+        boolean packageFreezeActive) {
 }

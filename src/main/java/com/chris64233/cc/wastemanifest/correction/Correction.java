@@ -30,11 +30,7 @@ import java.util.List;
  */
 @Entity
 @Table(name = "manifest_corrections",
-        uniqueConstraints = {
-                @UniqueConstraint(columnNames = "correction_no"),
-                // 活动（PENDING）更正守卫：终态时置空，多个 NULL 不冲突
-                @UniqueConstraint(columnNames = "active_manifest_no")
-        })
+        uniqueConstraints = @UniqueConstraint(columnNames = "correction_no"))
 public class Correction {
 
     @Id
@@ -80,10 +76,6 @@ public class Correction {
     @Column(name = "closed_at")
     private Instant closedAt;
 
-    /** PENDING 期间等于联单号（数据库唯一约束保证一联单至多一笔活动更正），终态置空 */
-    @Column(name = "active_manifest_no", length = 64)
-    private String activeManifestNo;
-
     @OneToMany(mappedBy = "correction", cascade = CascadeType.ALL, orphanRemoval = true)
     @OrderBy("id ASC")
     private List<CorrectionChange> changes = new ArrayList<>();
@@ -105,7 +97,6 @@ public class Correction {
         this.reason = reason;
         this.evidenceRef = evidenceRef;
         this.disputeImpact = disputeImpact;
-        this.activeManifestNo = manifest.getManifestNo();
     }
 
     public void addChange(CorrectionChange change) {
@@ -124,31 +115,26 @@ public class Correction {
         this.status = CorrectionStatus.EFFECTIVE;
         this.resultVersionNo = resultVersionNo;
         this.closedAt = Instant.now();
-        this.activeManifestNo = null;
     }
 
     public void markRejected() {
         this.status = CorrectionStatus.REJECTED;
         this.closedAt = Instant.now();
-        this.activeManifestNo = null;
     }
 
     public void markWithdrawn() {
         this.status = CorrectionStatus.WITHDRAWN;
         this.closedAt = Instant.now();
-        this.activeManifestNo = null;
     }
 
     public void markFrozen() {
         this.status = CorrectionStatus.FROZEN;
         this.closedAt = Instant.now();
-        this.activeManifestNo = null;
     }
 
     public void markSuperseded() {
         this.status = CorrectionStatus.SUPERSEDED;
         this.closedAt = Instant.now();
-        this.activeManifestNo = null;
     }
 
     public Long getId() {

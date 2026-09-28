@@ -11,9 +11,13 @@ import com.chris64233.cc.wastemanifest.correction.dto.VersionDiffResponse;
 import com.chris64233.cc.wastemanifest.correction.dto.VersionItemResponse;
 import com.chris64233.cc.wastemanifest.correction.dto.VersionResponse;
 import com.chris64233.cc.wastemanifest.correction.exception.CorrectionNotFoundException;
+import com.chris64233.cc.wastemanifest.manifest.ActiveManifestOp;
+import com.chris64233.cc.wastemanifest.manifest.ActiveManifestOpRepository;
+import com.chris64233.cc.wastemanifest.manifest.ActiveOpType;
 import com.chris64233.cc.wastemanifest.manifest.Manifest;
 import com.chris64233.cc.wastemanifest.manifest.ManifestEventRepository;
 import com.chris64233.cc.wastemanifest.manifest.ManifestRepository;
+import com.chris64233.cc.wastemanifest.manifest.ManifestService;
 import com.chris64233.cc.wastemanifest.manifest.ManifestStatus;
 import com.chris64233.cc.wastemanifest.manifest.dto.ManifestDetailResponse;
 import com.chris64233.cc.wastemanifest.manifest.dto.ManifestEventResponse;
@@ -45,6 +49,9 @@ public class CorrectionService {
     private final ManifestVersionRepository versions;
     private final CorrectionRepository corrections;
     private final CorrectionDecisionRepository decisions;
+    private final com.chris64233.cc.wastemanifest.manifest.ActiveOpGuard activeOps;
+    private final ManifestService manifestService;
+    private final com.chris64233.cc.wastemanifest.incident.IncidentService incidentService;
     private final BigDecimal weightToleranceRatio;
 
     public CorrectionService(ManifestRepository manifests,
@@ -52,12 +59,18 @@ public class CorrectionService {
                              ManifestVersionRepository versions,
                              CorrectionRepository corrections,
                              CorrectionDecisionRepository decisions,
+                             com.chris64233.cc.wastemanifest.manifest.ActiveOpGuard activeOps,
+                             ManifestService manifestService,
+                             com.chris64233.cc.wastemanifest.incident.IncidentService incidentService,
                              @Value("${manifest.weight-tolerance-ratio:0.05}") BigDecimal weightToleranceRatio) {
         this.manifests = manifests;
         this.events = events;
         this.versions = versions;
         this.corrections = corrections;
         this.decisions = decisions;
+        this.activeOps = activeOps;
+        this.manifestService = manifestService;
+        this.incidentService = incidentService;
         this.weightToleranceRatio = weightToleranceRatio;
     }
 
@@ -80,9 +93,6 @@ public class CorrectionService {
         }
         if (manifest.isRegulatoryFrozen()) {
             throw new BusinessRuleException("联单已被监管冻结，不得发起更正");
-        }
-        if (corrections.existsByManifestManifestNoAndStatus(manifestNo, CorrectionStatus.PENDING)) {
-            throw new BusinessRuleException("同一联单同时只能有一笔活动更正");
         }
         if (request.applicantRole() == DecisionRole.REGULATOR) {
             throw new BusinessRuleException("监管方为复核方，不能作为更正申请人");
@@ -114,6 +124,12 @@ public class CorrectionService {
 
         DisputeImpact impact = evaluateImpact(base, changes);
 
+        // 共享活动守卫：异常处置与差错更正互斥，同一版本并发只有一个操作登记成功。
+        if (!activeOps.tryAcquire(manifestNo, ActiveOpType.CORRECTION,
+                request.correctionNo(), base.getVersionNo())) {
+            throw new BusinessRuleException("同一联单同时只能有一个活动操作（更正或异常处置）");
+        }
+
         Correction correction = new Correction(request.correctionNo(), manifest, base.getVersionNo(),
                 request.applicantRole(), request.reason(), request.evidenceRef(), impact);
         for (CorrectionChange change : changes) {
@@ -123,8 +139,8 @@ public class CorrectionService {
         try {
             corrections.saveAndFlush(correction);
         } catch (DataIntegrityViolationException e) {
-            throw new ConflictException(
-                    "更正号冲突或同一联单已存在活动更正: " + request.correctionNo());
+            // 整个事务回滚，守卫行一并撤销
+            throw new ConflictException("更正号冲突: " + request.correctionNo());
         }
         return toCorrectionResponse(correction);
     }
@@ -156,10 +172,12 @@ public class CorrectionService {
         // 确认期间出现新的监管冻结或其他版本生效：基于旧版本的更正不得落地。
         if (correction.getManifest().isRegulatoryFrozen()) {
             correction.markFrozen();
+            activeOps.release(manifestNo, correctionNo);
             throw new BusinessRuleException("联单已被监管冻结，更正 " + correctionNo + " 终止、不得落地");
         }
         if (correction.getBaseVersionNo() != correction.getManifest().getCurrentVersionNo()) {
             correction.markSuperseded();
+            activeOps.release(manifestNo, correctionNo);
             throw new BusinessRuleException(
                     "基线版本已被其他版本取代，更正 " + correctionNo + " 终止、不得落地");
         }
@@ -193,11 +211,18 @@ public class CorrectionService {
         correction.addDecision(decision);
 
         switch (request.value()) {
-            case REJECTED -> correction.markRejected();
-            case WITHDRAWN -> correction.markWithdrawn();
+            case REJECTED -> {
+                correction.markRejected();
+                activeOps.release(manifestNo, correctionNo);
+            }
+            case WITHDRAWN -> {
+                correction.markWithdrawn();
+                activeOps.release(manifestNo, correctionNo);
+            }
             case APPROVED -> {
                 if (allRequiredApproved(correction, requiredRoles)) {
                     makeEffective(correction);
+                    activeOps.release(manifestNo, correctionNo);
                 }
             }
         }
@@ -212,9 +237,12 @@ public class CorrectionService {
         for (Correction correction : corrections.findByManifestManifestNoOrderByIdAsc(manifestNo)) {
             if (correction.isPending()) {
                 correction.markFrozen();
+                activeOps.release(manifestNo, correction.getCorrectionNo());
             }
         }
-        return com.chris64233.cc.wastemanifest.manifest.ManifestService.toDetail(manifest);
+        // 冻结时点所有确认中的异常处置同样终止、释放冻结包装，不得留下半条运输链。
+        incidentService.freezePending(manifestNo);
+        return manifestService.toDetail(manifest);
     }
 
     @Transactional(readOnly = true)
@@ -262,14 +290,16 @@ public class CorrectionService {
                 .map(CorrectionService::toCorrectionResponse)
                 .toList();
         List<ManifestEventResponse> timeline =
-                com.chris64233.cc.wastemanifest.manifest.ManifestService.toEventResponses(
+                ManifestService.toEventResponses(
                         events.findByManifestManifestNoOrderByIdAsc(manifestNo));
         return new ManifestRecordResponse(
-                com.chris64233.cc.wastemanifest.manifest.ManifestService.toDetail(manifest),
+                manifestService.toDetail(manifest),
                 current,
                 versionList.stream().map(CorrectionService::toVersionResponse).toList(),
                 diffs,
                 correctionResponses,
+                incidentService.listIncidents(manifestNo),
+                incidentService.listSegments(manifestNo),
                 timeline);
     }
 
@@ -289,10 +319,12 @@ public class CorrectionService {
                 .orElseThrow(() -> new IllegalStateException("缺少当前有效版本"));
         if (currentEffective.getVersionNo() != base.getVersionNo()) {
             correction.markSuperseded();
+            activeOps.release(manifest.getManifestNo(), correction.getCorrectionNo());
             throw new BusinessRuleException("基线版本已被其他版本取代，更正不得落地");
         }
         if (manifest.isRegulatoryFrozen()) {
             correction.markFrozen();
+            activeOps.release(manifest.getManifestNo(), correction.getCorrectionNo());
             throw new BusinessRuleException("联单已被监管冻结，更正不得落地");
         }
 

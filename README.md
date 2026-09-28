@@ -23,22 +23,41 @@
 - **幂等**：更正号与决定事件号均全局唯一。同号同内容重放返回当前结果；同号异内容返回 409 冲突。
 - **查询**：`GET /record` 一次返回当前有效版本、全部版本、相邻版本差异、更正审批时间线（含每项决定事件）与交接事件时间线；也可单独查询版本列表、任意两版本差异和单笔更正详情。
 
+## 运输途中异常处置
+
+承运方可对运输中（`IN_TRANSIT`/`RECEIVED_BY_TRANSPORTER`）的当前有效联单登记泄漏、遗失或改道异常，经各方确认后一次性拆分包装去向。
+
+- **异常登记**：记录唯一事件号、异常类型（`LEAK`/`LOSS`/`DIVERSION`）、发生时间、地点、证据引用，以及按明细序号定位的受影响包装及数量；可附处置口径（清理后重新包装的数量/重量、鉴别后的废物类别）。异常只能引用登记时的当前有效版本（`baseVersionNo`）；受影响数量不得超过该明细扣除既往方案拆出量后的剩余量；发生时间不得早于已有交接事件。相同事件号相同内容重放返回当前结果（幂等），同号异内容返回 409。改道必须指定新处置方和预计到达时间，且不得出现在泄漏/遗失中。
+- **包装冻结**：泄漏或遗失登记成功即冻结受影响包装；冻结期间原联单不能继续正常交接（详情 `packageFreezeActive=true`）。确认中的异常处置（含改道）同样暂停原联单交接，避免货物在去向未定时被交付。方案终止（拒绝/撤回/冻结/失效）时释放冻结、包装恢复原流转；方案生效时冻结随包装拆出一并解除。
+- **方案确认**：按各方责任分别确认——产生方（`GENERATOR`）、承运方（`TRANSPORTER`）、原处置方（`OLD_DISPOSER`）为必要方；改道还必须新处置方（`NEW_DISPOSER`）确认。遗失或处置口径引起废物类别/数量变化时，还必须监管方（`REGULATOR`）作出监管决定。每个角色只能决定一次，决定事件（`APPROVED`/`REJECTED`/`WITHDRAWN`）落库不可修改，决定时间不得倒序。任一方拒绝即终止（`REJECTED`）；仅承运方可撤回（`WITHDRAWN`）；全部必要方批准才一次性生效（`EFFECTIVE`）。
+- **一次性拆分（不留半条运输链）**：生效时在同一事务内将未受影响部分与受影响部分一次分开——前者继续沿原联单按剩余口径流转（容差结算与版本快照均以扣减后的剩余申报量为准），后者形成与原联单相连（`parentManifestNo`、段明细 `sourceItemSeq` 指回原明细序号）的产物：泄漏/改道形成前往目的处置方（泄漏为原处置方、改道为新处置方）的**新运输段**，遗失形成**损失记录**（`LOSS`，包装退出运输链，不交接）。新运输段按 承运方交付 → 处置方接收 两段交接，事件号唯一、不可修改、拒绝时间倒序。全部包装转出（全改道/全损失）时原联单无剩余包装，结案为 `CLOSED`。任一确认失效、联单版本已变化或监管冻结后来生效，整次处置终止且不产生任何运输段或流向拆减。
+- **与差错更正并发互斥**：更正与异常处置共享同一活动操作守卫（每联单至多一个活动操作）。基于同一版本并发时只有一个操作登记成功，后来操作（无论更正还是异常）必须在该操作结束后读取新版本重新计算；已确认的包装去向（运输段/损失记录）与争议结论不会被覆盖。异常处置确认期间引用版本被更正推进（`SUPERSEDED`）或联单被监管冻结（`FROZEN`）时不得落地。
+- **幂等**：异常事件号、决定事件号、运输段交接事件号均全局唯一；同号同内容重放返回当前结果，同号异内容返回 409。
+- **查询**：`GET /incidents`、`GET /incidents/{incidentNo}` 返回异常证据、各方决定、受影响/处置口径行；`GET /segments`、`GET /segments/{segmentNo}` 返回包装拆分前后关系（来源明细序号）、目的处置方与运输段交接链；`GET /record` 在此之外一并返回全部异常处置、运输段（含交接事件）和原联单交接时间线，构成完整交接链与监管处理视图。
+
 ## API 概览
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | POST | `/api/manifests` | 创建联单（含废物明细） |
-| GET | `/api/manifests/{manifestNo}` | 联单详情（状态、当前保管方、重量、明细、当前版本号、冻结标记） |
+| GET | `/api/manifests/{manifestNo}` | 联单详情（状态、当前保管方、原始/剩余申报重量、明细、当前版本号、冻结标记、包装冻结标记） |
 | GET | `/api/manifests/{manifestNo}/timeline` | 完整审计时间线（全部交接/争议事件） |
 | POST | `/api/manifests/{manifestNo}/handover` | 交接事件（`role` 为 GENERATOR/TRANSPORTER/DISPOSER） |
 | POST | `/api/manifests/{manifestNo}/dispute-confirmations` | 争议确认（仅 GENERATOR/DISPOSER） |
+| POST | `/api/manifests/{manifestNo}/incidents` | 登记运输异常（泄漏/遗失/改道，含受影响包装与证据） |
+| GET | `/api/manifests/{manifestNo}/incidents` | 全部运输异常处置 |
+| GET | `/api/manifests/{manifestNo}/incidents/{incidentNo}` | 异常详情（证据、受影响/处置口径、各方决定、运输段） |
+| POST | `/api/manifests/{manifestNo}/incidents/{incidentNo}/decisions` | 异常处置决定（三方/新旧处置方/监管确认、拒绝、撤回） |
+| GET | `/api/manifests/{manifestNo}/segments` | 全部运输段/损失记录（含拆分关系与交接链） |
+| GET | `/api/manifests/{manifestNo}/segments/{segmentNo}` | 单个运输段详情 |
+| POST | `/api/manifests/{manifestNo}/segments/{segmentNo}/handover` | 新运输段交接（承运方交付/处置方接收） |
 | POST | `/api/manifests/{manifestNo}/corrections` | 发起差错更正（仅已完成联单） |
 | GET | `/api/manifests/{manifestNo}/corrections/{correctionNo}` | 更正详情（变更项、决定事件、影响评估） |
 | POST | `/api/manifests/{manifestNo}/corrections/{correctionNo}/decisions` | 提交更正决定（三方确认 / 监管复核 / 撤回） |
-| POST | `/api/manifests/{manifestNo}/freeze` | 监管冻结（终止所有确认中更正，禁止新更正） |
+| POST | `/api/manifests/{manifestNo}/freeze` | 监管冻结（终止所有确认中更正与异常处置，禁止新操作） |
 | GET | `/api/manifests/{manifestNo}/versions` | 全部联单版本（含当前有效版本） |
 | GET | `/api/manifests/{manifestNo}/versions/diff?from=1&to=2` | 两版本间字段差异 |
-| GET | `/api/manifests/{manifestNo}/record` | 完整档案：当前有效版本 + 版本差异 + 审批时间线 + 交接时间线 |
+| GET | `/api/manifests/{manifestNo}/record` | 完整档案：版本+差异+更正+异常处置+运输段+交接链 |
 
 ## 开发环境
 

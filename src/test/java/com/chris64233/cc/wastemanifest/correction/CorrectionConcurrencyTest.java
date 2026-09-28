@@ -18,7 +18,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.test.util.ReflectionTestUtils;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -123,8 +122,8 @@ class CorrectionConcurrencyTest {
     }
 
     /**
-     * 防御纵深：即使绕过活动更正唯一约束注入一笔基于 v1 的 PENDING 更正，
-     * 在 v2 生效后它也必须被标记 SUPERSEDED、不得落地。
+     * 防御纵深：即使绕过共享活动守卫直接注入一笔基于 v1 的 PENDING 更正
+     * （守卫表中没有对应行），在 v2 生效后它也必须被标记 SUPERSEDED、不得落地。
      */
     @Test
     void staleInjectedCorrectionIsSupersededAndCannotLand() {
@@ -141,10 +140,9 @@ class CorrectionConcurrencyTest {
         assertThat(manifests.findByManifestNo("CC-003").orElseThrow().getCurrentVersionNo())
                 .isEqualTo(2);
 
-        // 注入一笔活动守卫列为空（绕过唯一约束）但状态为 PENDING、基线仍为 v1 的更正
+        // 直接注入一笔 PENDING 更正而不占用共享活动守卫（模拟绕过守卫）
         Correction stale = new Correction("CR-STALE", manifest, 1, DecisionRole.GENERATOR,
                 "注入的过期更正", "evidence", DisputeImpact.NONE);
-        ReflectionTestUtils.setField(stale, "activeManifestNo", null);
         corrections.saveAndFlush(stale);
 
         assertThatThrownBy(() -> correctionService.decide("CC-003", "CR-STALE",

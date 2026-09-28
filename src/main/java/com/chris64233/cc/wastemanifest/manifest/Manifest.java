@@ -106,6 +106,11 @@ public class Manifest {
         this.receivedWeight = receivedWeight;
     }
 
+    /** 全部包装经异常处置转出（全改道/全损失），原联单无剩余包装而结案。 */
+    public void markClosed() {
+        this.status = ManifestStatus.CLOSED;
+    }
+
     /** 更正生效：仅推进当前有效版本指针，联单原始行与交接事件不变。 */
     public void applyNewVersion(int versionNo) {
         this.currentVersionNo = versionNo;
