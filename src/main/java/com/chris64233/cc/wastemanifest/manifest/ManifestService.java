@@ -3,6 +3,8 @@ package com.chris64233.cc.wastemanifest.manifest;
 import com.chris64233.cc.wastemanifest.correction.ManifestVersion;
 import com.chris64233.cc.wastemanifest.correction.ManifestVersionItem;
 import com.chris64233.cc.wastemanifest.correction.ManifestVersionRepository;
+import com.chris64233.cc.wastemanifest.incident.IncidentRepository;
+import com.chris64233.cc.wastemanifest.incident.IncidentStatus;
 import com.chris64233.cc.wastemanifest.manifest.dto.CreateManifestRequest;
 import com.chris64233.cc.wastemanifest.manifest.dto.DisputeConfirmRequest;
 import com.chris64233.cc.wastemanifest.manifest.dto.HandoverRequest;
@@ -28,15 +30,18 @@ public class ManifestService {
     private final ManifestRepository manifests;
     private final ManifestEventRepository events;
     private final ManifestVersionRepository versions;
+    private final IncidentRepository incidents;
     private final BigDecimal weightToleranceRatio;
 
     public ManifestService(ManifestRepository manifests,
                            ManifestEventRepository events,
                            ManifestVersionRepository versions,
+                           IncidentRepository incidents,
                            @Value("${manifest.weight-tolerance-ratio:0.05}") BigDecimal weightToleranceRatio) {
         this.manifests = manifests;
         this.events = events;
         this.versions = versions;
+        this.incidents = incidents;
         this.weightToleranceRatio = weightToleranceRatio;
     }
 
@@ -83,6 +88,10 @@ public class ManifestService {
         };
         if (request.role() != expectedRole) {
             throw new BusinessRuleException("交接顺序错误，当前应由 " + expectedRole + " 提交，实际为 " + request.role());
+        }
+        // 异常冻结期间受影响包装不能继续正常交接；方案一次性生效（异常解除）前整单暂停。
+        if (incidents.existsByManifestManifestNoAndStatus(manifestNo, IncidentStatus.OPEN)) {
+            throw new BusinessRuleException("存在未处置完成的运输异常，受影响包装冻结中，不能继续正常交接");
         }
 
         List<ManifestEvent> timeline = events.findByManifestOrderByIdAsc(manifest);

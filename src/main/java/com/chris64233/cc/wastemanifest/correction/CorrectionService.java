@@ -11,6 +11,11 @@ import com.chris64233.cc.wastemanifest.correction.dto.VersionDiffResponse;
 import com.chris64233.cc.wastemanifest.correction.dto.VersionItemResponse;
 import com.chris64233.cc.wastemanifest.correction.dto.VersionResponse;
 import com.chris64233.cc.wastemanifest.correction.exception.CorrectionNotFoundException;
+import com.chris64233.cc.wastemanifest.incident.Incident;
+import com.chris64233.cc.wastemanifest.incident.IncidentPlan;
+import com.chris64233.cc.wastemanifest.incident.IncidentPlanRepository;
+import com.chris64233.cc.wastemanifest.incident.IncidentRepository;
+import com.chris64233.cc.wastemanifest.incident.IncidentStatus;
 import com.chris64233.cc.wastemanifest.manifest.Manifest;
 import com.chris64233.cc.wastemanifest.manifest.ManifestEventRepository;
 import com.chris64233.cc.wastemanifest.manifest.ManifestRepository;
@@ -45,6 +50,8 @@ public class CorrectionService {
     private final ManifestVersionRepository versions;
     private final CorrectionRepository corrections;
     private final CorrectionDecisionRepository decisions;
+    private final IncidentRepository incidents;
+    private final IncidentPlanRepository incidentPlans;
     private final BigDecimal weightToleranceRatio;
 
     public CorrectionService(ManifestRepository manifests,
@@ -52,12 +59,16 @@ public class CorrectionService {
                              ManifestVersionRepository versions,
                              CorrectionRepository corrections,
                              CorrectionDecisionRepository decisions,
+                             IncidentRepository incidents,
+                             IncidentPlanRepository incidentPlans,
                              @Value("${manifest.weight-tolerance-ratio:0.05}") BigDecimal weightToleranceRatio) {
         this.manifests = manifests;
         this.events = events;
         this.versions = versions;
         this.corrections = corrections;
         this.decisions = decisions;
+        this.incidents = incidents;
+        this.incidentPlans = incidentPlans;
         this.weightToleranceRatio = weightToleranceRatio;
     }
 
@@ -83,6 +94,11 @@ public class CorrectionService {
         }
         if (corrections.existsByManifestManifestNoAndStatus(manifestNo, CorrectionStatus.PENDING)) {
             throw new BusinessRuleException("同一联单同时只能有一笔活动更正");
+        }
+        // 异常处置与差错更正并发时只能有一个操作基于同一版本成功：
+        // 存在未处置完成异常时，包装去向尚未一次性落定，不得发起更正。
+        if (incidents.existsByManifestManifestNoAndStatus(manifestNo, IncidentStatus.OPEN)) {
+            throw new BusinessRuleException("联单存在未处置完成的运输异常，更正须待包装拆分落定后基于新版本发起");
         }
         if (request.applicantRole() == DecisionRole.REGULATOR) {
             throw new BusinessRuleException("监管方为复核方，不能作为更正申请人");
@@ -212,6 +228,14 @@ public class CorrectionService {
         for (Correction correction : corrections.findByManifestManifestNoOrderByIdAsc(manifestNo)) {
             if (correction.isPending()) {
                 correction.markFrozen();
+            }
+        }
+        // 冻结时点所有确认中的异常处置方案同样终止，不得留下半条运输链。
+        for (Incident incident : incidents.findByManifestManifestNoOrderByIdAsc(manifestNo)) {
+            for (IncidentPlan plan : incidentPlans.findByIncidentIdOrderByIdAsc(incident.getId())) {
+                if (plan.isPending()) {
+                    plan.markFrozen();
+                }
             }
         }
         return com.chris64233.cc.wastemanifest.manifest.ManifestService.toDetail(manifest);

@@ -1,6 +1,8 @@
 package com.chris64233.cc.wastemanifest.manifest.exception;
 
 import com.chris64233.cc.wastemanifest.correction.exception.CorrectionNotFoundException;
+import com.chris64233.cc.wastemanifest.incident.exception.IncidentNotFoundException;
+import com.chris64233.cc.wastemanifest.incident.exception.PlanNotFoundException;
 import com.chris64233.cc.wastemanifest.manifest.dto.ErrorResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -25,6 +27,18 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(CorrectionNotFoundException.class)
     public ResponseEntity<ErrorResponse> correctionNotFound(CorrectionNotFoundException e,
                                                             HttpServletRequest request) {
+        return build(HttpStatus.NOT_FOUND, e.getMessage(), request);
+    }
+
+    @ExceptionHandler(IncidentNotFoundException.class)
+    public ResponseEntity<ErrorResponse> incidentNotFound(IncidentNotFoundException e,
+                                                          HttpServletRequest request) {
+        return build(HttpStatus.NOT_FOUND, e.getMessage(), request);
+    }
+
+    @ExceptionHandler(PlanNotFoundException.class)
+    public ResponseEntity<ErrorResponse> planNotFound(PlanNotFoundException e,
+                                                      HttpServletRequest request) {
         return build(HttpStatus.NOT_FOUND, e.getMessage(), request);
     }
 
